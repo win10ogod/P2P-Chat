@@ -147,6 +147,12 @@ enum class PacketType : uint8_t {
     // NAT traversal
     PunchProbe      = 0x40,
     PunchAck        = 0x41,
+
+    // Relay (TURN-like)
+    RelayAllocate   = 0x50,
+    RelayAllocateOk = 0x51,
+    RelayData       = 0x52,
+    RelayRelease    = 0x53,
 };
 
 // ─── Thread-safe Bounded Queue ───────────────────────────────────────────────

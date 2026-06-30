@@ -2,13 +2,15 @@
 
 /**
  * @file session.h
- * @brief Central session manager coordinating P2P connections and signaling.
+ * @brief Central session manager coordinating P2P connections, STUN, TURN, and signaling.
  */
 
 #include "core/types.h"
 #include "network/udp_socket.h"
 #include "network/p2p_connection.h"
 #include "network/signaling.h"
+#include "network/stun_client.h"
+#include "network/turn_client.h"
 #include <map>
 #include <memory>
 
@@ -23,6 +25,9 @@ struct ChatEvent {
         PeerDisconnected,
         PeerListUpdated,
         TextReceived,
+        AudioReceived,
+        NatDetected,
+        RelayActivated,
         Error
     };
 
@@ -34,18 +39,17 @@ struct ChatEvent {
 
 /**
  * @class Session
- * @brief Owns the UDP socket, signaling client, and all P2P connections.
+ * @brief Owns the UDP socket, signaling client, STUN/TURN clients, and all P2P connections.
  *
  * Session is the central coordinator: it dispatches incoming datagrams to
- * either the signaling client or the appropriate P2P connection, and exposes
- * a poll-based event queue for the GUI to consume.
+ * either the signaling client, TURN client, or the appropriate P2P connection,
+ * and exposes a poll-based event queue for the GUI to consume.
  */
 class Session {
 public:
     Session();
     ~Session();
 
-    // Non-copyable, non-movable (owns threads and callbacks referencing `this`)
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
@@ -77,6 +81,12 @@ public:
     /// Request a peer list refresh from the signaling server.
     void refresh_peers();
 
+    /// Perform STUN-based NAT type detection.
+    void detect_nat();
+
+    /// Activate relay fallback for a peer when direct P2P fails.
+    bool activate_relay(const std::string& peer_uuid);
+
     /// Poll the next event (non-blocking).
     [[nodiscard]] std::optional<ChatEvent> poll_event();
 
@@ -84,6 +94,7 @@ public:
     [[nodiscard]] const PeerId&   local_id()   const noexcept { return local_id_; }
     [[nodiscard]] const Endpoint& local_ep()   const noexcept { return local_ep_; }
     [[nodiscard]] const Endpoint& public_ep()  const noexcept { return public_ep_; }
+    [[nodiscard]] NatType         nat_type()   const noexcept { return nat_type_; }
     [[nodiscard]] bool            is_initialized() const noexcept { return initialized_; }
 
     [[nodiscard]] std::vector<PacketFactory::PeerEntry> known_peers() const;
@@ -95,17 +106,20 @@ private:
                          const Endpoint& pub, const Endpoint& local);
     P2PConnection* find_by_endpoint(const Endpoint& ep);
 
-    UdpSocket                                           socket_;
-    std::unique_ptr<SignalingClient>                     signaling_;
-    PeerId                                              local_id_;
-    Endpoint                                            local_ep_;
-    Endpoint                                            public_ep_;
+    UdpSocket                                             socket_;
+    std::unique_ptr<SignalingClient>                       signaling_;
+    StunClient                                            stun_;
+    std::unique_ptr<TurnClient>                           turn_;
+    PeerId                                                local_id_;
+    Endpoint                                              local_ep_;
+    Endpoint                                              public_ep_;
+    NatType                                               nat_type_{NatType::Unknown};
     std::map<std::string, std::unique_ptr<P2PConnection>> conns_;
-    std::vector<PacketFactory::PeerEntry>                peer_list_;
-    ConcurrentQueue<ChatEvent>                          events_;
-    mutable std::shared_mutex                           conns_mtx_;
-    mutable std::shared_mutex                           peers_mtx_;
-    bool                                                initialized_{false};
+    std::vector<PacketFactory::PeerEntry>                 peer_list_;
+    ConcurrentQueue<ChatEvent>                            events_;
+    mutable std::shared_mutex                             conns_mtx_;
+    mutable std::shared_mutex                             peers_mtx_;
+    bool                                                  initialized_{false};
 };
 
 } // namespace p2p

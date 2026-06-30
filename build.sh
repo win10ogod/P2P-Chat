@@ -1,11 +1,11 @@
 #!/bin/bash
 # P2P Chat - Cross-platform build script
-# Usage: ./build.sh [debug|release] [--no-voice]
+# Usage: ./build.sh [debug|release] [--voice]
 
 set -e
 
 BUILD_TYPE="Release"
-ENABLE_VOICE="ON"
+ENABLE_VOICE="OFF"
 
 # Parse arguments
 for arg in "$@"; do
@@ -16,8 +16,8 @@ for arg in "$@"; do
         release)
             BUILD_TYPE="Release"
             ;;
-        --no-voice)
-            ENABLE_VOICE="OFF"
+        --voice)
+            ENABLE_VOICE="ON"
             ;;
     esac
 done

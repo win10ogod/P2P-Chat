@@ -1,4 +1,5 @@
 #include "ui/chat_window.h"
+#include "network/stun_client.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -237,13 +238,14 @@ void ChatWindow::render_status_bar(Session& session) {
     const auto& lid = session.local_id();
     const auto& lep = session.local_ep();
     const auto& pep = session.public_ep();
+    auto nat = session.nat_type();
 
     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-        "User: %s | UUID: %.8s... | Local: %s | Public: %s",
+        "User: %s | Local: %s | Public: %s | NAT: %.*s",
         lid.name.c_str(),
-        lid.uuid.c_str(),
         lep.is_valid() ? lep.to_string().c_str() : "N/A",
-        pep.is_valid() ? pep.to_string().c_str() : "N/A");
+        pep.is_valid() ? pep.to_string().c_str() : "N/A",
+        static_cast<int>(nat_type_str(nat).size()), nat_type_str(nat).data());
 }
 
 void ChatWindow::render_connect_dialog(Session& session) {
@@ -301,6 +303,9 @@ void ChatWindow::process_events(Session& session) {
         case ChatEvent::PeerDisconnected:
         case ChatEvent::PeerListUpdated:
         case ChatEvent::ServerDisconnected:
+        case ChatEvent::AudioReceived:
+        case ChatEvent::NatDetected:
+        case ChatEvent::RelayActivated:
         case ChatEvent::Error:
             break;
         }

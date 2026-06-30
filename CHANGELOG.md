@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-06-30
+
+### Added
+- STUN client (RFC 5389) for public endpoint discovery and NAT type detection.
+- NAT type classification: Open Internet, Full Cone, Restricted Cone, Port Restricted, Symmetric.
+- TURN-like relay client for fallback when direct P2P hole-punching fails.
+- Relay support in the signaling server (allocate, forward, release).
+- Complete audio engine with PortAudio capture/playback and Opus encode/decode.
+- Jitter buffer for smooth audio playback over unreliable networks.
+- NAT type display in the GUI status bar.
+- Relay fallback API in Session for transparent connectivity.
+- `detect_nat()` and `activate_relay()` methods in Session.
+- New packet types: RelayAllocate, RelayAllocateOk, RelayData, RelayRelease.
+- New event types: AudioReceived, NatDetected, RelayActivated.
+
+### Changed
+- Audio engine is now conditionally compiled (HAS_VOICE=1 for full PortAudio + Opus).
+- Build script defaults to voice OFF; use `--voice` flag to enable.
+- Session now integrates STUN and TURN clients alongside signaling.
+- `send_text()` transparently falls back to relay when direct P2P is unavailable.
+- Status bar shows NAT type information.
+
+### Removed
+- All stub implementations and placeholder code.
+- Outdated CHANGELOG entries referencing incomplete modules.
+
 ## [2.0.0] - 2026-06-29
 
 ### Added
@@ -14,7 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Right-click context menu for peer actions.
 - Connection dialog with server address input.
 - Status bar showing local/public endpoint information.
-- Audio engine module (stub, requires PortAudio + Opus for full functionality).
 - `.clang-format` for consistent code formatting.
 - `CONTRIBUTING.md` with coding standards.
 - `CHANGELOG.md` for version tracking.
@@ -30,7 +55,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Terminal-based UI (replaced by GUI).
 - Redundant `event_loop.cpp` and `peer_info.cpp`.
-- Empty placeholder audio files.
 - Unused design documents from source tree.
 
 ## [1.0.0] - 2026-06-28

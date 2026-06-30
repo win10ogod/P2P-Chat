@@ -16,6 +16,7 @@ bool Session::init(const std::string& username, uint16_t port) {
     local_ep_ = *ep;
 
     signaling_ = std::make_unique<SignalingClient>(socket_);
+    turn_ = std::make_unique<TurnClient>(socket_);
 
     signaling_->on_registered([this](bool ok, const Endpoint& pub) {
         if (ok) {
@@ -39,6 +40,19 @@ bool Session::init(const std::string& username, uint16_t port) {
         on_punch_notify(uuid, name, pub, local);
     });
 
+    // Register TURN data callback for relay-received messages
+    turn_->on_data([this](const std::string& from_uuid, const std::vector<uint8_t>& data) {
+        // Relay data is a serialized Packet; deserialize and dispatch
+        auto pkt = Packet::deserialize(data);
+        if (!pkt) return;
+        if (pkt->header.type == PacketType::TextMessage) {
+            auto parsed = PacketParser::parse_text(*pkt);
+            if (parsed) {
+                events_.push({ChatEvent::TextReceived, from_uuid, parsed->sender, parsed->text});
+            }
+        }
+    });
+
     socket_.start_receive([this](Datagram dg) { on_datagram(std::move(dg)); });
     initialized_ = true;
     return true;
@@ -51,10 +65,12 @@ void Session::shutdown() {
         for (auto& [_, c] : conns_) c->disconnect();
         conns_.clear();
     }
+    if (turn_) turn_->release();
     if (signaling_) signaling_->stop_heartbeat();
     socket_.stop_receive();
     socket_.close();
     signaling_.reset();
+    turn_.reset();
     initialized_ = false;
 }
 
@@ -82,16 +98,31 @@ void Session::disconnect_peer(const std::string& uuid) {
 bool Session::send_text(const std::string& uuid, const std::string& text) {
     std::shared_lock lock(conns_mtx_);
     auto it = conns_.find(uuid);
-    if (it == conns_.end()) return false;
-    return it->second->send_text(text, local_id_.uuid);
+    if (it != conns_.end() && it->second->state() == ConnState::Connected) {
+        return it->second->send_text(text, local_id_.uuid);
+    }
+
+    // Fallback: attempt relay if TURN is active
+    if (turn_ && turn_->is_active()) {
+        auto pkt = PacketFactory::make_text(local_id_.uuid, text, 0);
+        auto data = pkt.serialize();
+        return turn_->send_relayed(uuid, data);
+    }
+
+    return false;
 }
 
 bool Session::broadcast_text(const std::string& text) {
     std::shared_lock lock(conns_mtx_);
     bool any = false;
-    for (auto& [_, c] : conns_) {
+    for (auto& [uuid, c] : conns_) {
         if (c->state() == ConnState::Connected) {
             c->send_text(text, local_id_.uuid);
+            any = true;
+        } else if (turn_ && turn_->is_active()) {
+            auto pkt = PacketFactory::make_text(local_id_.uuid, text, 0);
+            auto data = pkt.serialize();
+            turn_->send_relayed(uuid, data);
             any = true;
         }
     }
@@ -110,6 +141,33 @@ void Session::refresh_peers() {
     if (signaling_ && signaling_->is_registered()) {
         signaling_->request_peer_list();
     }
+}
+
+void Session::detect_nat() {
+    // Run STUN detection in a background thread to avoid blocking
+    std::thread([this] {
+        auto result = stun_.detect_nat_type(socket_);
+        if (result.success) {
+            nat_type_ = result.nat_type;
+            public_ep_ = result.mapped_ep;
+            std::string info = "NAT Type: ";
+            info += nat_type_str(nat_type_);
+            info += " | Public: ";
+            info += result.mapped_ep.to_string();
+            events_.push({ChatEvent::NatDetected, "", "", info});
+        }
+    }).detach();
+}
+
+bool Session::activate_relay(const std::string& /*peer_uuid*/) {
+    if (!turn_ || !signaling_ || !signaling_->is_registered()) return false;
+    if (turn_->is_active()) return true;
+
+    bool ok = turn_->allocate(signaling_->server_ep(), local_id_.uuid);
+    if (ok) {
+        events_.push({ChatEvent::RelayActivated, "", "", "Relay fallback activated"});
+    }
+    return ok;
 }
 
 std::optional<ChatEvent> Session::poll_event() {
@@ -137,17 +195,20 @@ void Session::on_datagram(Datagram dg) {
     case PacketType::PunchNotify:
         if (signaling_) signaling_->handle_packet(*pkt, dg.sender);
         break;
+    case PacketType::RelayAllocateOk:
+    case PacketType::RelayData:
+        if (turn_) turn_->handle_packet(*pkt, dg.sender);
+        break;
     default: {
         std::shared_lock lock(conns_mtx_);
         auto* conn = find_by_endpoint(dg.sender);
         if (conn) {
             conn->handle_packet(*pkt, dg.sender);
         } else {
-            // Route to any connection in Punching state (NAT traversal in progress)
             for (auto& [_, c] : conns_) {
                 if (c->state() == ConnState::Punching) {
                     c->handle_packet(*pkt, dg.sender);
-                    break; // Only deliver to the first punching connection
+                    break;
                 }
             }
         }
@@ -159,7 +220,7 @@ void Session::on_datagram(Datagram dg) {
 void Session::on_punch_notify(const std::string& uuid, const std::string& name,
                               const Endpoint& pub, const Endpoint& local) {
     std::unique_lock lock(conns_mtx_);
-    if (conns_.count(uuid)) return; // Already connecting/connected
+    if (conns_.count(uuid)) return;
 
     PeerId peer{name, uuid};
     auto conn = std::make_unique<P2PConnection>(socket_, peer);
